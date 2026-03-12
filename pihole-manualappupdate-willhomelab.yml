@@ -1,0 +1,82 @@
+---
+- name: Manually update Pi-hole and resolve alert
+  hosts: "{{ target }}"
+  become: yes
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  tasks:
+    - name: Update Pi-hole
+      command: pihole -up
+      register: pihole_update_output
+
+    - name: Get Pi-hole version info
+      command: pihole -v
+      register: pihole_version_output
+
+    - name: Parse installed Pi-hole versions
+      set_fact:
+        pihole_core_installed: "{{ pihole_version_output.stdout_lines[0] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+        pihole_web_installed:  "{{ pihole_version_output.stdout_lines[1] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+        pihole_ftl_installed:  "{{ pihole_version_output.stdout_lines[2] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+
+    - name: Parse latest Pi-hole versions
+      set_fact:
+        pihole_core_latest: "{{ pihole_version_output.stdout_lines[0] | regex_replace('.*Latest: v([0-9\\.]+).*', '\\1') }}"
+        pihole_web_latest:  "{{ pihole_version_output.stdout_lines[1] | regex_replace('.*Latest: v([0-9\\.]+).*', '\\1') }}"
+        pihole_ftl_latest:  "{{ pihole_version_output.stdout_lines[2] | regex_replace('.*Latest: v([0-9\\.]+).*', '\\1') }}"
+
+    - name: Insert installed Pi-hole versions into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_versions (hostname, app_name, version, checked_at)
+          VALUES
+          ('{{ inventory_hostname }}', 'pihole-core', '{{ pihole_core_installed }}', NOW()),
+          ('{{ inventory_hostname }}', 'pihole-web', '{{ pihole_web_installed }}', NOW()),
+          ('{{ inventory_hostname }}', 'pihole-ftl', '{{ pihole_ftl_installed }}', NOW());
+
+    - name: Insert latest Pi-hole versions into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_latest_versions (app_name, latest_version, checked_at)
+          VALUES
+          ('pihole-core', '{{ pihole_core_latest }}', NOW()),
+          ('pihole-web', '{{ pihole_web_latest }}', NOW()),
+          ('pihole-ftl', '{{ pihole_ftl_latest }}', NOW());
+
+    - name: Determine if Pi-hole is outdated
+      set_fact:
+        pihole_outdated: >-
+          {{
+            (pihole_core_latest is version(pihole_core_installed, '>'))
+            or
+            (pihole_web_latest is version(pihole_web_installed, '>'))
+            or
+            (pihole_ftl_latest is version(pihole_ftl_installed, '>'))
+          }}
+
+    - name: Resolve Pi-hole outdated alert if up to date
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "PiHoleOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Pi-hole has been updated and is now up to date on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: not pihole_outdated | bool

@@ -1,0 +1,147 @@
+---
+- name: Check Pi-hole installed and latest versions, store in DB, and alert if outdated
+  hosts: "{{ target }}"
+  become: yes
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  tasks:
+    - name: Ensure PyMySQL is installed
+      apt:
+        name: python3-pymysql
+        state: present
+  
+    - name: Get Pi-hole version info
+      command: pihole -v
+      register: pihole_version_output
+
+    - name: Extract installed Core version
+      set_fact:
+        pihole_core_installed: "{{ pihole_version_output.stdout_lines[0] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+
+    - name: Extract installed Web version
+      set_fact:
+        pihole_web_installed: "{{ pihole_version_output.stdout_lines[1] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+
+    - name: Extract installed FTL version
+      set_fact:
+        pihole_ftl_installed: "{{ pihole_version_output.stdout_lines[2] | regex_replace('.* v([0-9\\.]+).*', '\\1') }}"
+
+    - name: Combine installed Pi-hole versions
+      set_fact:
+        pihole_installed_combined: "core={{ pihole_core_installed }}, web={{ pihole_web_installed }}, ftl={{ pihole_ftl_installed }}"
+
+    - name: Insert installed Pi-hole version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_versions (hostname, app_name, version, checked_at)
+          VALUES ('{{ inventory_hostname }}', 'pihole', '{{ pihole_installed_combined }}', NOW());
+
+    - name: Fetch latest Pi-hole Core version
+      uri:
+        url: https://api.github.com/repos/pi-hole/pi-hole/releases/latest
+        return_content: yes
+      register: pihole_core_latest
+
+    - name: Fetch latest Pi-hole Web version
+      uri:
+        url: https://api.github.com/repos/pi-hole/AdminLTE/releases/latest
+        return_content: yes
+      register: pihole_web_latest
+
+    - name: Fetch latest Pi-hole FTL version
+      uri:
+        url: https://api.github.com/repos/pi-hole/FTL/releases/latest
+        return_content: yes
+      register: pihole_ftl_latest
+
+    - name: Extract latest versions (strip leading v)
+      set_fact:
+        pihole_core_latest_version: "{{ pihole_core_latest.json.tag_name | regex_replace('^v', '') }}"
+        pihole_web_latest_version: "{{ pihole_web_latest.json.tag_name | regex_replace('^v', '') }}"
+        pihole_ftl_latest_version: "{{ pihole_ftl_latest.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Combine latest Pi-hole versions
+      set_fact:
+        pihole_latest_combined: "core={{ pihole_core_latest_version }}, web={{ pihole_web_latest_version }}, ftl={{ pihole_ftl_latest_version }}"
+
+    - name: Insert latest Pi-hole version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_latest_versions (app_name, latest_version, checked_at)
+          VALUES ('pihole', '{{ pihole_latest_combined }}', NOW());
+
+    - name: Determine if Pi-hole is outdated
+      set_fact:
+        pihole_outdated: >-
+          {{
+            (pihole_core_latest_version is version(pihole_core_installed, '>'))
+            or
+            (pihole_web_latest_version is version(pihole_web_installed, '>'))
+            or
+            (pihole_ftl_latest_version is version(pihole_ftl_installed, '>'))
+          }}
+
+    - name: Send Alertmanager alert if Pi-hole is outdated
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "PiHoleOutdated"
+              severity: "warning"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Pi-hole is outdated on {{ inventory_hostname }}"
+              description: |
+                Installed versions:
+                  Core: {{ pihole_core_installed }}
+                  Web:  {{ pihole_web_installed }}
+                  FTL:  {{ pihole_ftl_installed }}
+
+                Latest versions:
+                  Core: {{ pihole_core_latest_version }}
+                  Web:  {{ pihole_web_latest_version }}
+                  FTL:  {{ pihole_ftl_latest_version }}
+
+                Pi-hole is outdated and requires a manual update.
+
+                To update:
+                1. Log in to the Semaphore UI.
+                2. Go to Task Templates.
+                3. Run: "Pi-hole Manual App Update and Resolve Alert".
+
+                This will update all Pi-hole components, write new version
+                information to the database, and automatically resolve this
+                alert once the update is complete.
+            startsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: pihole_outdated | bool
+
+    - name: Resolve Pi-hole outdated alert if up to date
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "PiHoleOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Pi-hole is now up to date on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: not pihole_outdated | bool

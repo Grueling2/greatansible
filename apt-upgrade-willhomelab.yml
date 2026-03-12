@@ -1,0 +1,71 @@
+---
+- name: Update and upgrade packages on target server
+  hosts: "{{ target }}"
+  become: yes
+
+  tasks:
+
+    - name: Check for lock file
+      stat:
+        path: /tmp/apt_update.lock
+      register: lockfile
+
+    - name: Exit if lock file exists
+      meta: end_play
+      when: lockfile.stat.exists | bool
+
+    - name: Create lock file
+      file:
+        path: /tmp/apt_update.lock
+        state: touch
+
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages (full upgrade)
+      apt:
+        upgrade: dist
+
+    - name: Autoremove unused packages
+      apt:
+        autoremove: yes
+
+    - name: Autoclean apt cache
+      apt:
+        autoclean: yes
+
+    - name: Check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Notify if reboot is required
+      debug:
+        msg: "Reboot required on {{ inventory_hostname }}"
+      when: reboot_required.stat.exists | bool
+
+    - name: Send Alertmanager alert if reboot is required
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "RebootRequired"
+              severity: "warning"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Reboot required on {{ inventory_hostname }}"
+              description: "The server {{ inventory_hostname }} requires a reboot after updates."
+            startsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: reboot_required.stat.exists | bool
+
+
+    - name: Remove lock file
+      file:
+        path: /tmp/apt_update.lock
+        state: absent

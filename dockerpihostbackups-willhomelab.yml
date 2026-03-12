@@ -1,0 +1,38 @@
+---
+- name: Backup monitoring and semaphore directories to TrueNAS
+  hosts: "{{ target }}"
+  become: yes
+
+  vars:
+    backup_dir: "/mnt/dockerpihostbackups"
+    timestamp: "{{ lookup('pipe', 'date +%F-%H%M') }}"
+    monitoring_backup: "monitoring-backup-{{ timestamp }}.tar.gz"
+    semaphore_backup: "semaphore-backup-{{ timestamp }}.tar.gz"
+
+  tasks:
+
+    - name: Ensure NFS mount directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+
+    - name: Backup /opt/monitoring to TrueNAS (excluding Prometheus data)
+      command: >
+        tar -czvf {{ backup_dir }}/{{ monitoring_backup }}
+        --exclude=/opt/monitoring/prometheus/data
+        /opt/monitoring
+      args:
+        chdir: "/tmp"
+
+    - name: Backup /opt/semaphore to TrueNAS
+      command: >
+        tar -czvf {{ backup_dir }}/{{ semaphore_backup }}
+        /opt/semaphore
+      args:
+        chdir: "/tmp"
+
+    - name: Show backup file locations
+      debug:
+        msg:
+          - "Monitoring backup stored at: {{ backup_dir }}/{{ monitoring_backup }}"
+          - "Semaphore backup stored at: {{ backup_dir }}/{{ semaphore_backup }}"

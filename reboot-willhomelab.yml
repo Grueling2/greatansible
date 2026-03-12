@@ -1,0 +1,26 @@
+---
+- name: Reboot target server
+  hosts: "{{ target }}"
+  become: yes
+
+  tasks:
+    - name: Reboot the server
+      reboot:
+        msg: "Reboot initiated by Ansible"
+        reboot_timeout: 600
+
+    - name: Send resolved alert to Alertmanager
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "RebootRequired"
+              severity: "warning"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Reboot completed on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"

@@ -1,0 +1,113 @@
+---
+- name: Check Nginx Proxy Manager installed and latest versions, store in DB, and alert if outdated
+  hosts: "{{ target }}"
+  become: yes
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  tasks:
+    - name: Ensure PyMySQL is installed
+      apt:
+        name: python3-pymysql
+        state: present
+
+    - name: Get NPM container ID
+      command: docker ps -q --filter "ancestor=jc21/nginx-proxy-manager"
+      register: npm_container_id
+
+    - name: Fail if NPM container not found
+      fail:
+        msg: "Nginx Proxy Manager container not found on this host."
+      when: npm_container_id.stdout == ""
+
+    - name: Get NPM version from package.json
+      command: >
+        docker exec {{ npm_container_id.stdout }}
+        sh -c "cat /app/package.json | grep '\"version\"' | head -n 1"
+      register: npm_version_raw
+
+    - name: Extract clean NPM installed version
+      set_fact:
+        npm_installed_version: "{{ npm_version_raw.stdout.split(':')[1] | replace('\"','') | replace(',','') | trim }}"
+
+    - name: Insert installed NPM version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_versions (hostname, app_name, version, checked_at)
+          VALUES ('{{ inventory_hostname }}', 'nginx-proxy-manager', '{{ npm_installed_version }}', NOW());
+
+    - name: Fetch latest NPM version from GitHub
+      uri:
+        url: https://api.github.com/repos/NginxProxyManager/nginx-proxy-manager/releases/latest
+        return_content: yes
+      register: npm_latest
+
+    - name: Extract latest version (strip leading v)
+      set_fact:
+        npm_latest_version: "{{ npm_latest.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Insert latest NPM version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_latest_versions (app_name, latest_version, checked_at)
+          VALUES ('nginx-proxy-manager', '{{ npm_latest_version }}', NOW());
+
+    - name: Determine if NPM is outdated
+      set_fact:
+        npm_outdated: "{{ (npm_latest_version is version(npm_installed_version, '>')) }}"
+
+    - name: Send Alertmanager alert if NPM is outdated
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "NPMOutdated"
+              severity: "warning"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Nginx Proxy Manager is outdated on {{ inventory_hostname }}"
+              description: |
+                Installed version: {{ npm_installed_version }}
+                Latest version: {{ npm_latest_version }}
+
+                Nginx Proxy Manager is outdated and requires a manual update.
+
+                To update:
+                1. Log in to the Semaphore UI.
+                2. Go to Task Templates.
+                3. Run: "Nginx Proxy Manager Manual App Update and Resolve Alert".
+
+                This will update the app, write new version info to the database,
+                and automatically resolve this alert once the update is complete.
+            startsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: npm_outdated | bool
+
+    - name: Resolve NPM outdated alert if up to date
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "NPMOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Nginx Proxy Manager is now up to date on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: not npm_outdated | bool

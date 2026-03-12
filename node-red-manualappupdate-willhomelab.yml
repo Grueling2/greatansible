@@ -1,0 +1,76 @@
+---
+- name: Manually update Node-RED and resolve alert
+  hosts: "{{ target }}"
+  become: yes
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  tasks:
+    - name: Update Node-RED globally via npm
+      command: npm install -g --unsafe-perm node-red
+      register: nodered_update_output
+
+    - name: Restart Node-RED service
+      service:
+        name: nodered
+        state: restarted
+
+    - name: Get Node-RED installed version
+      command: node-red --version
+      register: nodered_version_output
+
+    - name: Extract installed Node-RED version
+      set_fact:
+        nodered_installed_version: "{{ nodered_version_output.stdout_lines[0] | regex_replace('Node-RED v', '') | trim }}"
+
+    - name: Fetch latest Node-RED version from npm registry
+      uri:
+        url: https://registry.npmjs.org/node-red/latest
+        return_content: yes
+      register: nodered_latest
+
+    - name: Extract latest version field
+      set_fact:
+        nodered_latest_version: "{{ nodered_latest.json.version }}"
+
+    - name: Insert installed Node-RED version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_versions (hostname, app_name, version, checked_at)
+          VALUES ('{{ inventory_hostname }}', 'node-red', '{{ nodered_installed_version }}', NOW());
+
+    - name: Insert latest Node-RED version into MariaDB
+      community.mysql.mysql_query:
+        login_host: "{{ mariadb_host }}"
+        login_user: "{{ mariadb_user }}"
+        login_password: "{{ mariadb_password }}"
+        login_db: "{{ mariadb_db }}"
+        query: >
+          INSERT INTO app_latest_versions (app_name, latest_version, checked_at)
+          VALUES ('node-red', '{{ nodered_latest_version }}', NOW());
+
+    - name: Determine if Node-RED is outdated
+      set_fact:
+        nodered_outdated: "{{ (nodered_latest_version is version(nodered_installed_version, '>')) }}"
+
+    - name: Resolve Node-RED outdated alert if up to date
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "NodeRedOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Node-RED has been updated and is now up to date on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: not nodered_outdated | bool
