@@ -1,5 +1,5 @@
 ---
-- name: Backup monitoring and semaphore directories to TrueNAS
+- name: Backup monitoring, semaphore, and datapipeline directories to TrueNAS
   hosts: "{{ target }}"
   become: yes
 
@@ -8,6 +8,7 @@
     timestamp: "{{ lookup('pipe', 'date +%F-%H%M') }}"
     monitoring_backup: "monitoring-backup-{{ timestamp }}.tar.gz"
     semaphore_backup: "semaphore-backup-{{ timestamp }}.tar.gz"
+    datapipeline_backup: "datapipeline-backup-{{ timestamp }}.tar.gz"
 
   tasks:
 
@@ -31,8 +32,16 @@
       args:
         chdir: "/tmp"
 
+    - name: Backup /opt/datapipeline to TrueNAS
+      command: >
+        tar -czvf {{ backup_dir }}/{{ datapipeline_backup }}
+        /opt/datapipeline
+      args:
+        chdir: "/tmp"
+
     - name: Show backup file locations
       debug:
         msg:
           - "Monitoring backup stored at: {{ backup_dir }}/{{ monitoring_backup }}"
           - "Semaphore backup stored at: {{ backup_dir }}/{{ semaphore_backup }}"
+          - "Datapipeline backup stored at: {{ backup_dir }}/{{ datapipeline_backup }}"
