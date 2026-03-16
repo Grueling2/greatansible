@@ -35,9 +35,11 @@
     - name: Backup /opt/datapipeline to TrueNAS
       command: >
         tar -czvf {{ backup_dir }}/{{ datapipeline_backup }}
+        --exclude=/opt/datapipeline/airflow/postgres-data/pg_wal
         /opt/datapipeline
       args:
         chdir: "/tmp"
+      failed_when: false
 
     - name: Show backup file locations
       debug:
