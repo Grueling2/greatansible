@@ -1,5 +1,5 @@
 ---
-- name: Sync Spark export files from Pi to Mac OneDrive
+- name: Securely sync Spark export files from Pi to Mac OneDrive
   hosts: "{{ target }}"
   gather_facts: no
 
@@ -8,13 +8,21 @@
       include_vars: /var/lib/semaphore/.secrets.yml
 
   tasks:
-    - name: Sync exported CSVs from Pi to Mac OneDrive folder
-      synchronize:
-        src: "{{ pi_export_path }}"
-        dest: "{{ mac_onedrive_path }}"
-        mode: pull
-        recursive: yes
-        delete: no
-        rsync_opts:
-          - "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r"
-        ssh_args: "-i {{ ansible_ssh_private_key_file }}"
+    - name: Find all files under the Pi export directory
+      ansible.builtin.find:
+        paths: "{{ pi_export_path }}"
+        file_type: file
+      register: export_files
+
+    - name: Ensure destination directories exist on Mac
+      ansible.builtin.file:
+        path: "{{ mac_onedrive_path }}/{{ item.path | dirname | regex_replace('^' ~ pi_export_path, '') }}"
+        state: directory
+      loop: "{{ export_files.files }}"
+
+    - name: Fetch each file from Pi to Mac
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ mac_onedrive_path }}/{{ item.path | regex_replace('^' ~ pi_export_path, '') }}"
+        flat: yes
+      loop: "{{ export_files.files }}"
