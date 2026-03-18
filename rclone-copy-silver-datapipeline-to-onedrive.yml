@@ -1,0 +1,18 @@
+---
+- name: Upload pipeline exports to OneDrive
+  hosts: "{{ target }}"
+  become: yes
+
+  vars_files:
+    - .secrets.yml
+
+  tasks:
+
+    - name: Ensure export directory exists
+      ansible.builtin.file:
+        path: "{{ pi_export_path }}"
+        state: directory
+
+    - name: Upload exports to OneDrive
+      ansible.builtin.command:
+        cmd: rclone copy "{{ pi_export_path }}" datapipeline_onedrive:
