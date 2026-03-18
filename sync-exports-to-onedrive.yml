@@ -1,0 +1,19 @@
+---
+- name: Sync Datapipeline Spark Silver export files from Pi to OneDrive
+  hosts: "{{ target }}"
+  gather_facts: no
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  tasks:
+    - name: Sync exported CSVs from Pi to OneDrive folder
+      synchronize:
+        src: "{{ pi_export_path }}"
+        dest: "{{ mac_onedrive_path }}"
+        mode: pull
+        recursive: yes
+        delete: no
+        rsync_opts:
+          - "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r"
