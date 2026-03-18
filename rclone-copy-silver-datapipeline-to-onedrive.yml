@@ -3,8 +3,9 @@
   hosts: "{{ target }}"
   become: yes
 
-  vars_files:
-    - .secrets.yml
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
 
   tasks:
 
