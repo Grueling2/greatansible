@@ -1,5 +1,5 @@
 ---
-- name: Sync Datapipeline Spark Silver export files from Pi to OneDrive
+- name: Sync Spark export files from Pi to Mac OneDrive
   hosts: "{{ target }}"
   gather_facts: no
 
@@ -8,7 +8,7 @@
       include_vars: /var/lib/semaphore/.secrets.yml
 
   tasks:
-    - name: Sync exported CSVs from Pi to OneDrive folder
+    - name: Sync exported CSVs from Pi to Mac OneDrive folder
       synchronize:
         src: "{{ pi_export_path }}"
         dest: "{{ mac_onedrive_path }}"
@@ -17,3 +17,4 @@
         delete: no
         rsync_opts:
           - "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r"
+        ssh_args: "-i {{ ansible_ssh_private_key_file }}"
