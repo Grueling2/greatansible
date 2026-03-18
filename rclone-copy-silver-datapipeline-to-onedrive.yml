@@ -1,18 +1,12 @@
 ---
 - name: Upload pipeline exports to OneDrive
   hosts: "{{ target }}"
-  become: yes
 
   pre_tasks:
     - name: Load secrets
       include_vars: /var/lib/semaphore/.secrets.yml
 
   tasks:
-
-    - name: Ensure export directory exists
-      ansible.builtin.file:
-        path: "{{ pi_export_path }}"
-        state: directory
 
     - name: Upload exports to OneDrive
       ansible.builtin.command:
