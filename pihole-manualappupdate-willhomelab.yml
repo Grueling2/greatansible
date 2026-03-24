@@ -65,18 +65,33 @@
             (pihole_ftl_latest is version(pihole_ftl_installed, '>'))
           }}
 
+
+    - name: Fetch active Pi-hole outdated alert from Alertmanager
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts?filter=alertname=PiHoleOutdated&filter=instance={{ inventory_hostname }}"
+        return_content: yes
+      register: active_alert
+      when: not pihole_outdated | bool
+
+    - name: Extract labels from active alert
+      set_fact:
+        pihole_alert_labels: "{{ active_alert.json[0].labels }}"
+      when:
+        - not pihole_outdated | bool
+        - active_alert.json | length > 0
+
     - name: Resolve Pi-hole outdated alert if up to date
       uri:
         url: "{{ alertmanager_url }}/api/v2/alerts"
         method: POST
         body_format: json
         body:
-          - labels:
-              alertname: "PiHoleOutdated"
-              instance: "{{ inventory_hostname }}"
+          - labels: "{{ pihole_alert_labels }}"
             annotations:
               summary: "Pi-hole has been updated and is now up to date on {{ inventory_hostname }}"
             endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
         headers:
           Content-Type: "application/json"
-      when: not pihole_outdated | bool
+      when:
+        - not pihole_outdated | bool
+        - pihole_alert_labels is defined
