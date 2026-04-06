@@ -38,4 +38,3 @@
         msg:
           - "Monitoring backup stored at: {{ backup_dir }}/{{ monitoring_backup }}"
           - "Semaphore backup stored at: {{ backup_dir }}/{{ semaphore_backup }}"
-          - "Datapipeline backup stored at: {{ backup_dir }}/{{ datapipeline_backup }}"
