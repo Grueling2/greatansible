@@ -1,0 +1,112 @@
+---
+- name: Check Valheim version via SteamCMD and emit Prometheus metrics
+  hosts: afuvalheim
+  become: true
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  vars:
+    valheim_app_id: 896660
+    valheim_metric_file: "{{ valheim_metric_dir }}/valheim_version.prom"
+    valheim_steam_user: anonymous
+
+  tasks:
+
+    - name: Ensure Prometheus metric directory exists
+      file:
+        path: "{{ valheim_metric_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Query SteamCMD for latest Valheim version
+      command: >
+        {{ valheim_steamcmd_path }}
+        +login {{ valheim_steam_user }}
+        +app_info_print {{ valheim_app_id }}
+        +quit
+      register: steamcmd_info
+      changed_when: false
+
+    - name: Extract latest buildid from SteamCMD output
+      set_fact:
+        valheim_latest_buildid: >-
+          {{ steamcmd_info.stdout
+             | regex_search('"buildid"\\s+"([0-9]+)"', '\\1') }}
+
+    - name: Read installed Valheim manifest
+      slurp:
+        path: "{{ valheim_manifest_path }}"
+      register: manifest_raw
+
+    - name: Extract installed buildid from manifest
+      set_fact:
+        valheim_installed_buildid: >-
+          {{ manifest_raw.content
+             | b64decode
+             | regex_search('"buildid"\\s+"([0-9]+)"', '\\1') }}
+
+    - name: Determine version match (1 = up to date, 0 = update needed)
+      set_fact:
+        valheim_version_match: >-
+          {{ 1 if valheim_latest_buildid == valheim_installed_buildid else 0 }}
+
+    - name: Write Prometheus metric file
+      copy:
+        dest: "{{ valheim_metric_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          valheim_version_match {{ valheim_version_match }}
+          valheim_latest_buildid {{ valheim_latest_buildid }}
+          valheim_installed_buildid {{ valheim_installed_buildid }}
+
+    - name: Send Alertmanager alert if Valheim is outdated
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "ValheimOutdated"
+              severity: "warning"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Valheim server is outdated on {{ inventory_hostname }}"
+              description: |
+                Installed buildid: {{ valheim_installed_buildid }}
+                Latest buildid: {{ valheim_latest_buildid }}
+
+                Valheim requires a manual update.
+
+                To update:
+                1. Log in to the Semaphore UI.
+                2. Go to Task Templates.
+                3. Run: "Valheim Manual App Update and Resolve Alert".
+
+                This will update the server, write new version info,
+                and automatically resolve this alert once complete.
+            startsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: valheim_version_match == 0
+
+    - name: Resolve Valheim outdated alert if up to date
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "ValheimOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Valheim server is now up to date on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: valheim_version_match == 1
