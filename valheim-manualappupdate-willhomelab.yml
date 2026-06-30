@@ -1,0 +1,111 @@
+---
+- name: Automatically update SteamCMD and Valheim if needed
+  hosts: afuvalheim
+  become: true
+
+  pre_tasks:
+    - name: Load secrets
+      include_vars: /var/lib/semaphore/.secrets.yml
+
+  vars:
+    valheim_app_id: 896660
+    valheim_metric_file: "{{ valheim_metric_dir }}/valheim_version.prom"
+    valheim_steam_user: anonymous
+
+  tasks:
+
+    - name: Query SteamCMD for latest Valheim version
+      command: >
+        /usr/games/steamcmd
+        +login {{ valheim_steam_user }}
+        +app_info_print {{ valheim_app_id }}
+        +quit
+      register: steamcmd_info
+      changed_when: false
+
+    - name: Extract latest buildid from SteamCMD output
+      set_fact:
+        valheim_latest_buildid: "{{ (steamcmd_info.stdout | regex_findall('buildid\"\\s*\"([0-9]+)\"'))[0] }}"
+
+
+    - name: Read installed Valheim manifest
+      slurp:
+        path: "{{ valheim_manifest_path }}"
+      register: manifest_raw
+
+    - name: Extract installed buildid from manifest
+      set_fact:
+        valheim_installed_buildid: "{{ (manifest_raw.content | b64decode | regex_findall('buildid\"\\s*\"([0-9]+)\"'))[0] }}"
+
+
+    - name: Determine if Valheim is outdated
+      set_fact:
+        valheim_needs_update: "{{ valheim_latest_buildid != valheim_installed_buildid }}"
+
+
+    - name: Update SteamCMD itself
+      command: >
+        /usr/games/steamcmd
+        +login {{ valheim_steam_user }}
+        +quit
+      register: steamcmd_update
+      changed_when: false
+
+
+    - name: Stop Valheim server before update
+      systemd:
+        name: valheim
+        state: stopped
+      when: valheim_needs_update
+
+    - name: Update Valheim Dedicated Server
+      command: >
+        /usr/games/steamcmd
+        +login {{ valheim_steam_user }}
+        +app_update {{ valheim_app_id }} validate
+        +quit
+      register: valheim_update
+      when: valheim_needs_update
+
+    - name: Start Valheim server after update
+      systemd:
+        name: valheim
+        state: started
+      when: valheim_needs_update
+
+
+    - name: Ensure Prometheus metric directory exists
+      file:
+        path: "{{ valheim_metric_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write Prometheus metric file
+      copy:
+        dest: "{{ valheim_metric_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          valheim_version_match {{ 1 if not valheim_needs_update else 0 }}
+          valheim_latest_buildid {{ valheim_latest_buildid }}
+          valheim_installed_buildid {{ valheim_installed_buildid }}
+
+
+    - name: Resolve ValheimOutdated alert after update
+      uri:
+        url: "{{ alertmanager_url }}/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: "ValheimOutdated"
+              instance: "{{ inventory_hostname }}"
+            annotations:
+              summary: "Valheim server has been updated on {{ inventory_hostname }}"
+            endsAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        headers:
+          Content-Type: "application/json"
+      when: valheim_needs_update
