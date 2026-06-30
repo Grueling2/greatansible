@@ -33,9 +33,8 @@
 
     - name: Extract latest buildid from SteamCMD output
       set_fact:
-        valheim_latest_buildid: >-
-          {{ steamcmd_info.stdout
-             | regex_search('buildid"\\s*"([0-9]+)"', '\\1') }}
+        valheim_latest_buildid: "{{ (steamcmd_info.stdout | regex_findall('buildid\"\\s*\"([0-9]+)\"'))[0] }}"
+
 
     - name: Read installed Valheim manifest
       slurp:
@@ -44,10 +43,8 @@
 
     - name: Extract installed buildid from manifest
       set_fact:
-        valheim_installed_buildid: >-
-          {{ manifest_raw.content
-             | b64decode
-             | regex_search('buildid"\\s*"([0-9]+)"', '\\1') }}
+        valheim_installed_buildid: "{{ (manifest_raw.content | b64decode | regex_findall('buildid\"\\s*\"([0-9]+)\"'))[0] }}"
+
 
     - name: Determine version match (1 = up to date, 0 = update needed)
       set_fact:
