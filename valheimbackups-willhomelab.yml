@@ -1,6 +1,6 @@
 ---
 - name: Backup and truncate Valheim server log
-  hosts: valheim
+  hosts: afuvalheim
   become: yes
 
   vars:
