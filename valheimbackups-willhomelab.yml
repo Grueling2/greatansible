@@ -38,3 +38,8 @@
       copy:
         content: ""
         dest: "{{ valheim_log_src }}"
+        
+    - name: Restart Valheim server so it reopens the log file
+      ansible.builtin.systemd:
+        name: valheim
+        state: restarted
