@@ -9,6 +9,10 @@
 
   tasks:
 
+    - name: Load Semaphore secrets file
+      include_vars:
+        file: /var/lib/semaphore/.secrets.yml
+
     - name: Verify NFS mount exists
       stat:
         path: "{{ backup_dir }}"
